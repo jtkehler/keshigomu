@@ -1,7 +1,7 @@
 [project]
-name = "mikan"
+name = "keshigomu"
 version = "0.1.0"
-description = "Add your description here"
+description = "Remove Japanese subtitle SDH annotations and furigana with TypeSafe"
 readme = "README.md"
 authors = [
     { name = "Jack Kehler", email = "jtkehler@gmail.com" }
@@ -12,6 +12,9 @@ dependencies = [
     "typer>=0.27.2",
     "typesafe-sdk>=0.7.0",
 ]
+
+[project.scripts]
+keshigomu = "keshigomu.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
