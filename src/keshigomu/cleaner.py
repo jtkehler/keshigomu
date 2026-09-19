@@ -124,12 +124,13 @@ def clean_text(
                 or (remove_furigana and answer.choice == "furigana")
             )
             logger.debug(
-                "%-6s %-10s confidence=%.2f p(%s)=%.2f %r",
+                "%-6s %-10s confidence=%.2f p(%s)=%.2f sentence=%r to_check=%r",
                 "remove" if remove else "keep",
                 answer.choice,
                 answer.confidence,
                 answer.choice,
                 answer.probabilities.get(answer.choice, 0.0),
+                sentence,
                 candidate,
             )
             if remove:
