@@ -14,7 +14,9 @@ classification is enabled. Keshigomu does not load a `.env` file or store creden
 
 ```sh
 uv sync
+uv run keshigomu input.srt
 uv run keshigomu input.srt cleaned.srt
+uv run keshigomu input.srt cleaned.srt --overwrite
 uv run keshigomu input.ass cleaned.ass --verbose
 uv run keshigomu input.srt cleaned.srt --keep-furigana
 uv run keshigomu input.srt cleaned.srt --keep-sdh
@@ -37,8 +39,12 @@ uv run keshigomu --help
 - `--verbose` / `-v`: show keep/remove decisions, labels, confidence, and selected
   class probabilities on stderr. Confidence, not class probability, controls removal.
 
-The output path must be new. Inputs are never edited. Output is UTF-8, with the
-format selected by its extension. SRT, ASS, and VTT have offline tests; other
+Omitting the output argument writes `{input file stem}.keshigomu.srt` beside the
+input (for example, `subs/episode.ja.ass` becomes `subs/episode.ja.keshigomu.srt`).
+Existing outputs are refused unless `--overwrite` is supplied. The input is only
+modified when explicitly selected as the output with `--overwrite`.
+
+Output is UTF-8, with the format selected by its extension. SRT, ASS, and VTT have offline tests; other
 pysubs2 formats have not been exercised. Prefer the same input/output format:
 serialization can change layout, numbering, and format-specific metadata.
 
@@ -112,9 +118,11 @@ Each candidate requires one sequential API request. With removal enabled, cues
 without candidates make no requests but still create an authenticated client.
 The SDK handles retries; Keshigomu-created clients use a 30-second timeout.
 
-Classification and serialization finish before output creation. Existing outputs
-are refused even if created during classification. API failures produce no output.
-A local disk-write failure can leave an incomplete new output file.
+Classification and serialization finish before opening the output for writing.
+Existing outputs are refused, including creation races, unless `--overwrite` (CLI)
+or `overwrite=True` (`clean_file`) is supplied. API failures leave existing outputs
+unchanged and create no new output. A local disk-write failure can leave an
+incomplete output file, including when overwriting.
 
 ## Deliberate limits
 

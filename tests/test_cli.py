@@ -15,55 +15,6 @@ from typesafe_sdk import TypeSafeClient, TypeSafeError
 from keshigomu import clean_text, cli
 
 
-def test_cli_delegates_to_shared_file_api(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = tmp_path / "input.srt"
-    output = tmp_path / "output.srt"
-    _ = source.write_text(
-        "1\n00:00:01,000 --> 00:00:02,000\n（声）はい\n", encoding="cp932"
-    )
-    calls: list[dict[str, object]] = []
-
-    def clean_file(
-        actual_source: Path, actual_output: Path, **options: object
-    ) -> tuple[int, int]:
-        assert actual_source == source
-        assert actual_output == output
-        calls.append(options)
-        return 2, 1
-
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    monkeypatch.setattr(cli, "clean_file", clean_file)
-    result = CliRunner().invoke(
-        cli.app,
-        [
-            str(source),
-            str(output),
-            "--model",
-            "custom-model",
-            "--encoding",
-            "cp932",
-            "--min-confidence",
-            "0.8",
-            "--remove-furigana",
-            "--verbose",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert result.stdout == ""
-    assert "Changed 2 cues" in result.stderr
-    assert calls == [
-        {
-            "model": "custom-model",
-            "encoding": "cp932",
-            "min_confidence": 0.8,
-            "remove_sdh": True,
-            "remove_furigana": True,
-        }
-    ]
-
-
 class Payload(TypedDict):
     state: dict[str, str]
     questions: dict[str, dict[str, object]]
@@ -264,6 +215,41 @@ def test_cli_preserves_dialogue_timing_and_source(
     ]
 
 
+def test_default_output_uses_source_stem_and_requires_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "subtitles" / "episode.ja.ass"
+    source.parent.mkdir()
+    subtitles = pysubs2.SSAFile()
+    subtitles.events = [
+        pysubs2.SSAEvent(start=1000, end=2000, text="（声）はい"),
+    ]
+    subtitles.save(source)
+    original = source.read_bytes()
+    output = source.parent / "episode.ja.keshigomu.srt"
+    _ = output.write_text("KEEP ME\n" * 100, encoding="utf-8")
+    before = output.read_bytes()
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+    runner = CliRunner()
+    refused = runner.invoke(cli.app, [str(source)])
+    assert refused.exit_code != 0
+    assert "--overwrite" in refused.stderr
+    assert output.read_bytes() == before
+
+    replaced = runner.invoke(
+        cli.app,
+        [str(source), "--overwrite", "--keep-sdh", "--keep-furigana"],
+    )
+    assert replaced.exit_code == 0, replaced.output
+    assert replaced.stdout == ""
+    assert [(event.start, event.end, event.text) for event in pysubs2.load(output)] == [
+        (1000, 2000, "（声）はい"),
+    ]
+    assert b"KEEP ME" not in output.read_bytes()
+    assert source.read_bytes() == original
+
+
 @pytest.mark.parametrize("same_path", [False, True])
 def test_refuses_to_overwrite_before_using_api(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_path: bool
@@ -332,14 +318,17 @@ def test_unknown_encoding_is_reported_before_creating_client(
     assert not output.exists()
 
 
+@pytest.mark.parametrize("existing_output", [False, True])
 def test_api_error_is_reported_without_partial_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing_output: bool
 ) -> None:
     source = tmp_path / "source.srt"
     output = tmp_path / "new.srt"
     _ = source.write_text(
         "1\n00:00:01,000 --> 00:00:02,000\n（声）はい\n", encoding="utf-8"
     )
+    if existing_output:
+        _ = output.write_text("KEEP ME", encoding="utf-8")
     client = TypeSafeClient(
         api_key="test-key",
         transport=httpx2.MockTransport(
@@ -351,11 +340,17 @@ def test_api_error_is_reported_without_partial_output(
         return client
 
     monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", client_factory)
-    result = CliRunner().invoke(cli.app, [str(source), str(output)])
+    result = CliRunner().invoke(
+        cli.app,
+        [str(source), str(output), *(["--overwrite"] if existing_output else [])],
+    )
     assert result.exit_code == 1
     assert "401" in result.stderr
     assert "Traceback" not in result.output
-    assert not output.exists()
+    if existing_output:
+        assert output.read_text(encoding="utf-8") == "KEEP ME"
+    else:
+        assert not output.exists()
 
 
 def test_ass_comments_drawings_and_styles_are_not_classified(

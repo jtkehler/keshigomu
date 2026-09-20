@@ -21,7 +21,13 @@ app = typer.Typer(
 @app.command()
 def main(
     source: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True)],
-    output: Annotated[Path, typer.Argument(dir_okay=False)],
+    output: Annotated[
+        Path | None,
+        typer.Argument(
+            dir_okay=False,
+            help="Output path; defaults to <source stem>.keshigomu.srt beside the source.",
+        ),
+    ] = None,
     model: Annotated[
         str, typer.Option(help="TypeSafe model or alias.")
     ] = DEFAULT_MODEL,
@@ -55,6 +61,9 @@ def main(
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Show each classification.")
     ] = False,
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="Replace an existing output file.")
+    ] = False,
 ) -> None:
     """Filter bracketed SDH annotations and/or furigana with TypeSafe."""
     if not 0.0 <= min_confidence <= 1.0:
@@ -62,9 +71,11 @@ def main(
             "Confidence must be finite and between 0 and 1.",
             param_hint="--min-confidence",
         )
-    if output.exists():
+    if output is None:
+        output = source.with_suffix(".keshigomu.srt")
+    if output.exists() and not overwrite:
         raise typer.BadParameter(
-            "Output already exists; choose a new path.", param_hint="output"
+            "Output already exists; use --overwrite to replace it.", param_hint="output"
         )
     try:
         with _verbose_logging(verbose):
@@ -76,6 +87,7 @@ def main(
                 remove_sdh=remove_sdh,
                 remove_furigana=remove_furigana,
                 encoding=encoding,
+                overwrite=overwrite,
             )
     except (
         typesafe_sdk.TypeSafeError,

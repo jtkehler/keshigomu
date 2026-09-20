@@ -152,21 +152,23 @@ def clean_file(
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     model: str = DEFAULT_MODEL,
     encoding: str = "utf-8-sig",
+    overwrite: bool = False,
 ) -> tuple[int, int]:
-    """Write a new UTF-8 subtitle file without modifying the input.
+    """Write a cleaned UTF-8 subtitle file.
 
     Comments and drawings are skipped. One owned client is reused across the file
     and closed, including on failure. A borrowed client is never closed.
 
     Args:
         source: Subtitle file to load with pysubs2.
-        output: New path; its extension determines the output format.
+        output: Destination path; its extension determines the output format.
         client: A borrowed client, or None to create a client.
         remove_sdh: Remove speaker labels and sound descriptions.
         remove_furigana: Remove pronunciation readings.
         min_confidence: Inclusive confidence threshold between zero and one.
         model: Model used only when creating a client.
         encoding: Input encoding; output is always UTF-8.
+        overwrite: Allow replacing an existing output, including the source.
 
     Returns:
         A (cues_changed, cues_removed) pair. Changed includes cues later dropped
@@ -175,7 +177,7 @@ def clean_file(
         writes the subtitles without classification and returns (0, 0).
 
     Raises:
-        FileExistsError: The output already exists, including creation races.
+        FileExistsError: The output exists and overwrite is False, including races.
         ValueError: The confidence threshold is invalid.
         typesafe_sdk.TypeSafeError: Classification fails or its answer is invalid.
         pysubs2.exceptions.Pysubs2Error: Subtitle parsing or serialization fails.
@@ -183,8 +185,10 @@ def clean_file(
     """
     _validate_confidence(min_confidence)
     source, output = Path(source), Path(output)
-    if output.exists():
-        raise FileExistsError(f"Output already exists; choose a new path: {output}")
+    if output.exists() and not overwrite:
+        raise FileExistsError(
+            f"Output already exists; set overwrite=True to replace it: {output}"
+        )
     output_format = pysubs2.formats.get_format_identifier(output.suffix.lower())
     subtitles = pysubs2.load(source, encoding=encoding)
     changed = removed = 0
@@ -215,8 +219,8 @@ def clean_file(
                 kept.append(event)
         subtitles.events = kept
     rendered = subtitles.to_string(output_format)
-    # Exclusive creation also protects paths created during classification.
-    with output.open("x", encoding="utf-8") as file:
+    # Keep creation race-safe unless replacement was explicitly requested.
+    with output.open("w" if overwrite else "x", encoding="utf-8") as file:
         _ = file.write(rendered)
     return changed, removed
 
