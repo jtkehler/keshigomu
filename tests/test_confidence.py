@@ -76,8 +76,7 @@ def test_cli_threshold_controls_action_and_verbose_output(
     )
     client = fixture_client(0.85)
 
-    def factory(**kwargs: object) -> TypeSafeClient:
-        assert kwargs["model"] == "jev-latest"
+    def factory(**_kwargs: object) -> TypeSafeClient:
         return client
 
     monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", factory)

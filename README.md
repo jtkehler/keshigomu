@@ -105,18 +105,34 @@ All cleaning logic lives in `cleaner.py`; `cli.py` handles command-line argument
 logging, and errors.
 
 1. `clean_text` finds candidates delimited by `() （） [] 〔〕`. It sends each
-   span's plain text and the **original cue's** plain text to a TypeSafe Choice
-   question, which returns `annotation`, `furigana`, or `speech`. Uncertainty is
-   handled through the returned confidence, not a separate choice.
+   span's plain text, its **original containing line's** plain text, and the
+   immediately preceding/following lines to a TypeSafe Choice question, which
+   returns `annotation`, `furigana`, or `speech`. Uncertainty is handled through
+   the returned confidence, not a separate choice.
 2. A selected category is removed only at or above the confidence threshold.
    The remaining text and existing ASS tags are retained.
-3. `clean_file` loads and saves with pysubs2, calls `clean_text` for dialogue,
-   skips comments/drawings, and drops a cue only when cleaning empties its visible
-   text. Retained timings are preserved.
+3. `clean_file` loads and saves with pysubs2 and uses the same per-match cleaner
+   across dialogue cues. It skips comments/drawings and drops a cue only when
+   cleaning empties its visible text. Retained timings are preserved.
 
-Each candidate requires one sequential API request. With removal enabled, cues
-without candidates make no requests but still create an authenticated client.
-The SDK handles retries; Keshigomu-created clients use a 30-second timeout.
+Each regex match requires one sequential API request, even when identical spans
+repeat on the same line or elsewhere in the file. Decisions are not shared.
+The state has four string fields: `sentence` is the original containing line,
+`to_check` is the candidate span, and `previousLine`/`nextLine` supply one original
+line on either side. The neighboring lines are context only, not deletion targets.
+
+For `clean_file`, neighbors cross dialogue cue boundaries in loaded-file order;
+comments and drawings are excluded from context. For `clean_text`, neighbors are
+limited to the supplied text. Blank lines are not skipped, and a missing or blank
+neighbor is `""`. Context always comes from the original text, before any removals.
+ASS `\N`/`\n` and literal line breaks delimit context; breaks inside complete ASS
+tags do not. A cross-line match uses the lines it spans as `sentence`, with
+`previousLine` before the first and `nextLine` after the last.
+Verbose logs include all four fields.
+
+With removal enabled, cues without candidates make no requests but still create
+an authenticated client. The SDK handles retries; Keshigomu-created clients use a
+30-second timeout.
 
 Classification and serialization finish before opening the output for writing.
 Existing outputs are refused, including creation races, unless `--overwrite` (CLI)
@@ -129,8 +145,8 @@ incomplete output file, including when overwriting.
 The current focus is a simple, readable pipeline, without separate analysis
 objects or policy-replay APIs. Repeated cleaning calls classify again.
 
-- No unbracketed SDH/music cleanup, speaker dictionary, neighboring-cue context,
-  batching, parallelism, or recursive parsing.
+- No unbracketed SDH/music cleanup, speaker dictionary, batching, parallelism,
+  or recursive parsing.
 - Quotation and other markers such as `「」 『』 《》 〈〉 ［］ 【】` are not candidates.
   Supported spans inside them still qualify, and removal can leave empty wrappers.
 - One level of same-bracket nesting is supported. Retained outer candidates are
@@ -138,8 +154,9 @@ objects or policy-replay APIs. Repeated cleaning calls classify again.
 - Separate ASS ruby events, HTML ruby markup, and robust tag-aware extraction
   are not supported. Bracket punctuation inside embedded ASS tags remains a known
   extraction limitation.
-- Repeated identical spans are not distinguished by occurrence in model state.
-  Repeated cleaning is not guaranteed idempotent because cue context changes.
+- Identical spans on the same line have identical model state: requests do not
+  include occurrence offsets. Repeated cleaning is not guaranteed idempotent
+  because line context changes.
 - A 0.9 confidence cutoff is a conservative policy, not 90% accuracy or a promise
   of zero dialogue loss. A cutoff of zero removes the confidence safeguard.
 

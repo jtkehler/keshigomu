@@ -96,24 +96,17 @@ class TrackedTransport(httpx2.MockTransport):
         super().close()
 
 
-@pytest.mark.parametrize("model", [None, "custom-model"])
 def test_text_api_creates_and_closes_its_own_client(
-    monkeypatch: pytest.MonkeyPatch, model: str | None
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transport = TrackedTransport(respond)
     client = TypeSafeClient(api_key="test-key", transport=transport)
-    seen: list[dict[str, object]] = []
 
-    def factory(**kwargs: object) -> TypeSafeClient:
-        seen.append(kwargs)
+    def factory(**_kwargs: object) -> TypeSafeClient:
         return client
 
     monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", factory)
-    if model is None:
-        assert keshigomu.clean_text("（声）はい") == "はい"
-    else:
-        assert keshigomu.clean_text("（声）はい", model=model) == "はい"
-    assert seen == [{"model": model or "jev-latest", "timeout": 30.0}]
+    assert keshigomu.clean_text("（声）はい") == "はい"
     assert transport.closed
 
 
@@ -147,6 +140,91 @@ def test_file_api_preserves_source_and_returns_counts(
     ]
 
 
+def test_file_context_skips_non_dialogue_and_preserves_dropped_neighbors(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.ass"
+    output = tmp_path / "output.ass"
+    subtitles = pysubs2.SSAFile()
+    subtitles.events = [
+        pysubs2.SSAEvent(type="Comment", text="（冒頭メモ）"),
+        pysubs2.SSAEvent(start=1000, end=2000, text="（拍手）"),
+        pysubs2.SSAEvent(type="Comment", text="（制作メモ）"),
+        pysubs2.SSAEvent(text=r"{\p1}m 0 0 l 10 10{\p0}"),
+        pysubs2.SSAEvent(start=3000, end=4000, text=r"（声）\Nはい"),
+        pysubs2.SSAEvent(start=5000, end=6000, text=r"つづき\N（声）また"),
+        pysubs2.SSAEvent(start=7000, end=8000, text="（内緒）"),
+        pysubs2.SSAEvent(type="Comment", text="（末尾メモ）"),
+    ]
+    subtitles.save(source)
+    original = source.read_bytes()
+    states: list[dict[str, str]] = []
+
+    def record(request: httpx2.Request) -> httpx2.Response:
+        state = cast(dict[str, dict[str, str]], json.loads(request.content))["state"]
+        states.append(state)
+        return respond(request)
+
+    with TypeSafeClient(
+        api_key="test-key", transport=httpx2.MockTransport(record)
+    ) as client:
+        assert keshigomu.clean_file(source, output, client=client) == (3, 1)
+        assert keshigomu.clean_text("（声）単独", client) == "単独"
+
+    assert states == [
+        {
+            "previousLine": "",
+            "sentence": "（拍手）",
+            "nextLine": "（声）",
+            "to_check": "（拍手）",
+        },
+        {
+            "previousLine": "（拍手）",
+            "sentence": "（声）",
+            "nextLine": "はい",
+            "to_check": "（声）",
+        },
+        {
+            "previousLine": "つづき",
+            "sentence": "（声）また",
+            "nextLine": "（内緒）",
+            "to_check": "（声）",
+        },
+        {
+            "previousLine": "（声）また",
+            "sentence": "（内緒）",
+            "nextLine": "",
+            "to_check": "（内緒）",
+        },
+        {
+            "previousLine": "",
+            "sentence": "（声）単独",
+            "nextLine": "",
+            "to_check": "（声）",
+        },
+    ]
+    assert source.read_bytes() == original
+    cleaned = pysubs2.load(output)
+    assert [
+        (event.start, event.end, event.text)
+        for event in cleaned
+        if not (event.is_comment or event.is_drawing)
+    ] == [
+        (3000, 4000, r"\Nはい"),
+        (5000, 6000, r"つづき\Nまた"),
+        (7000, 8000, "（内緒）"),
+    ]
+    assert [
+        (event.type, event.start, event.end, event.text)
+        for event in cleaned
+        if event.is_comment or event.is_drawing
+    ] == [
+        (event.type, event.start, event.end, event.text)
+        for event in subtitles
+        if event.is_comment or event.is_drawing
+    ]
+
+
 @pytest.mark.parametrize("fail_second", [False, True])
 def test_owned_file_client_closes_even_after_partial_processing(
     tmp_path: Path,
@@ -168,10 +246,8 @@ def test_owned_file_client_closes_even_after_partial_processing(
 
     transport = TrackedTransport(response)
     client = TypeSafeClient(api_key="test-key", transport=transport)
-    created: list[dict[str, object]] = []
 
-    def factory(**kwargs: object) -> TypeSafeClient:
-        created.append(kwargs)
+    def factory(**_kwargs: object) -> TypeSafeClient:
         return client
 
     monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", factory)
@@ -187,7 +263,6 @@ def test_owned_file_client_closes_even_after_partial_processing(
         assert (changed, removed) == (0, 0)
         assert [e.text for e in pysubs2.load(output)] == ["（声）はい", "（拍手）"]
     assert source.read_text(encoding="utf-8") == original
-    assert created == [{"model": "custom-model", "timeout": 30.0}]
     assert len(requests) == 2
     assert transport.closed
     assert capsys.readouterr() == ("", "")

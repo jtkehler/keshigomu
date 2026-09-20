@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import re
+from bisect import bisect_right
 from pathlib import Path
 
 import pysubs2
@@ -22,10 +23,17 @@ _BRACKETS = re.compile(
         )
     )
 )
+# Ignore breaks inside tags, including tags between a backslash and its N/n.
+_LINE_BREAKS = re.compile(
+    r"(?P<tag>\{[^}]*\})|"
+    + r"\r(?:\{[^}]*\})*(?:\n|\\(?:\{[^}]*\})*[Nn])|"
+    + r"\\(?:\{[^}]*\})*[Nn]|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]"
+)
 _QUESTION = typesafe_sdk.Choice(
     instructions={
-        "question": "What is the entire `to_check` span doing in the Japanese subtitle cue `sentence`?",
-        "focus": "Classify only the specified span, using the rest of the cue as context.",
+        "question": "What is the entire `to_check` span doing in the Japanese subtitle text `sentence`?",
+        "focus": "Classify only `to_check` in `sentence`. Use `previousLine` and `nextLine` as surrounding context, not as part of the span being classified.",
+        "context": "`previousLine` is the line immediately before `sentence`; `nextLine` is the line immediately after it. They may come from adjacent subtitle cues or different speakers. Empty strings mean no neighboring text is available.",
         "boundaries": [
             "Parentheses and quotation marks can contain spoken words, whispers or thoughts; punctuation alone is not evidence of SDH.",
             "An annotation describes who speaks or what is heard; speech transcribes what is said or thought.",
@@ -72,6 +80,10 @@ def clean_text(
 ) -> str:
     """Classify bracketed spans and remove the selected categories.
 
+    Each match is classified independently using its original containing line
+    and the immediately preceding/following lines within this text. Cross-line
+    matches use the lines they span, with neighbors outside that range.
+
     Args:
         text: A subtitle cue, optionally containing ASS tags.
         client: A borrowed client that remains open. If omitted, create and close
@@ -93,53 +105,18 @@ def clean_text(
     if not (remove_sdh or remove_furigana):
         return text
 
-    sentence = pysubs2.SSAEvent(text=text).plaintext
-    parts: list[str] = []
-    cursor = 0
     with (
         contextlib.nullcontext(client)
         if client is not None
         else typesafe_sdk.TypeSafeClient(model=model, timeout=30.0)
     ) as active_client:
-        for match in _BRACKETS.finditer(text):
-            if match.lastgroup == "tag":
-                continue
-            candidate = pysubs2.SSAEvent(text=match.group()).plaintext
-            # SDK 0.7 recursive JSON typing is partially unknown to Pyright.
-            response = active_client.system_one(  # pyright: ignore[reportUnknownMemberType]
-                state={"sentence": sentence, "to_check": candidate},
-                questions={"classify_sdh": _QUESTION},
-            )
-            answer = response.choices.get("classify_sdh")
-            if answer is None or answer.choice not in (
-                "annotation",
-                "furigana",
-                "speech",
-            ):
-                raise typesafe_sdk.TypeSafeError("Missing or unknown classification.")
-            if not 0.0 <= answer.confidence <= 1.0:
-                raise typesafe_sdk.TypeSafeError("Invalid classification confidence.")
-            remove = answer.confidence >= min_confidence and (
-                (remove_sdh and answer.choice == "annotation")
-                or (remove_furigana and answer.choice == "furigana")
-            )
-            logger.debug(
-                "%-6s %-10s confidence=%.2f p(%s)=%.2f sentence=%r to_check=%r",
-                "remove" if remove else "keep",
-                answer.choice,
-                answer.confidence,
-                answer.choice,
-                answer.probabilities.get(answer.choice, 0.0),
-                sentence,
-                candidate,
-            )
-            if remove:
-                parts.append(text[cursor : match.start()])
-                # Retain the existing treatment of ASS tags inside removed spans.
-                parts.extend(re.findall(r"\{[^}]*\}", match.group()))
-                cursor = match.end()
-    parts.append(text[cursor:])
-    return "".join(parts)
+        return _clean_texts(
+            [text],
+            active_client,
+            remove_sdh=remove_sdh,
+            remove_furigana=remove_furigana,
+            min_confidence=min_confidence,
+        )[0]
 
 
 def clean_file(
@@ -156,8 +133,10 @@ def clean_file(
 ) -> tuple[int, int]:
     """Write a cleaned UTF-8 subtitle file.
 
-    Comments and drawings are skipped. One owned client is reused across the file
-    and closed, including on failure. A borrowed client is never closed.
+    Comments and drawings are skipped, including for neighboring-line context.
+    Context crosses dialogue cue boundaries in loaded-file order and always uses
+    the original text. One owned client is reused across the file and closed,
+    including on failure. A borrowed client is never closed.
 
     Args:
         source: Subtitle file to load with pysubs2.
@@ -199,18 +178,25 @@ def clean_file(
             if client is not None
             else typesafe_sdk.TypeSafeClient(model=model, timeout=30.0)
         ) as active_client:
-            for event in subtitles:
-                if event.is_comment or event.is_drawing:
-                    kept.append(event)
-                    continue
-                original = event.text
-                event.text = clean_text(
-                    original,
+            cleaned = iter(
+                _clean_texts(
+                    [
+                        event.text
+                        for event in subtitles
+                        if not (event.is_comment or event.is_drawing)
+                    ],
                     active_client,
                     remove_sdh=remove_sdh,
                     remove_furigana=remove_furigana,
                     min_confidence=min_confidence,
                 )
+            )
+            for event in subtitles:
+                if event.is_comment or event.is_drawing:
+                    kept.append(event)
+                    continue
+                original = event.text
+                event.text = next(cleaned)
                 if event.text != original:
                     changed += 1
                     if not event.plaintext.strip():
@@ -223,6 +209,97 @@ def clean_file(
     with output.open("w" if overwrite else "x", encoding="utf-8") as file:
         _ = file.write(rendered)
     return changed, removed
+
+
+def _clean_texts(
+    texts: list[str],
+    client: typesafe_sdk.TypeSafeClient,
+    *,
+    remove_sdh: bool,
+    remove_furigana: bool,
+    min_confidence: float,
+) -> list[str]:
+    """Classify each raw match with original neighbors across the supplied texts."""
+    contexts: list[tuple[str, list[int], list[int], int]] = []
+    lines: list[str] = []
+    for text in texts:
+        line_starts = [0]
+        line_ends: list[int] = []
+        for boundary in _LINE_BREAKS.finditer(text):
+            if boundary.lastgroup != "tag":
+                line_ends.append(boundary.start())
+                line_starts.append(boundary.end())
+        line_ends.append(len(text))
+        contexts.append((text, line_starts, line_ends, len(lines)))
+        lines.extend(
+            pysubs2.SSAEvent(text=text[start:end]).plaintext
+            for start, end in zip(line_starts, line_ends, strict=True)
+        )
+
+    cleaned: list[str] = []
+    for text, line_starts, line_ends, line_offset in contexts:
+        parts: list[str] = []
+        cursor = 0
+        for match in _BRACKETS.finditer(text):
+            if match.lastgroup == "tag":
+                continue
+            candidate = pysubs2.SSAEvent(text=match.group()).plaintext
+            # Raw offsets distinguish repeated spans without changing extraction.
+            first = bisect_right(line_starts, match.start()) - 1
+            last = bisect_right(line_starts, match.end() - 1) - 1
+            first_line, last_line = line_offset + first, line_offset + last
+            sentence = (
+                lines[first_line]
+                if first == last
+                else pysubs2.SSAEvent(
+                    text=text[line_starts[first] : line_ends[last]]
+                ).plaintext
+            )
+            previous_line = lines[first_line - 1] if first_line > 0 else ""
+            next_line = lines[last_line + 1] if last_line + 1 < len(lines) else ""
+            # SDK 0.7 recursive JSON typing is partially unknown to Pyright.
+            response = client.system_one(  # pyright: ignore[reportUnknownMemberType]
+                state={
+                    "previousLine": previous_line,
+                    "sentence": sentence,
+                    "nextLine": next_line,
+                    "to_check": candidate,
+                },
+                questions={"classify_sdh": _QUESTION},
+            )
+            answer = response.choices.get("classify_sdh")
+            if answer is None or answer.choice not in (
+                "annotation",
+                "furigana",
+                "speech",
+            ):
+                raise typesafe_sdk.TypeSafeError("Missing or unknown classification.")
+            if not 0.0 <= answer.confidence <= 1.0:
+                raise typesafe_sdk.TypeSafeError("Invalid classification confidence.")
+            remove = answer.confidence >= min_confidence and (
+                (remove_sdh and answer.choice == "annotation")
+                or (remove_furigana and answer.choice == "furigana")
+            )
+            logger.debug(
+                "%-6s %-10s confidence=%.2f p(%s)=%.2f previousLine=%r sentence=%r nextLine=%r to_check=%r",
+                "remove" if remove else "keep",
+                answer.choice,
+                answer.confidence,
+                answer.choice,
+                answer.probabilities.get(answer.choice, 0.0),
+                previous_line,
+                sentence,
+                next_line,
+                candidate,
+            )
+            if remove:
+                parts.append(text[cursor : match.start()])
+                # Retain the existing treatment of ASS tags inside removed spans.
+                parts.extend(re.findall(r"\{[^}]*\}", match.group()))
+                cursor = match.end()
+        parts.append(text[cursor:])
+        cleaned.append("".join(parts))
+    return cleaned
 
 
 def _validate_confidence(min_confidence: float) -> None:

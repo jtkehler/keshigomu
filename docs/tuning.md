@@ -15,6 +15,20 @@ including a fourth `uncertain` choice. Removing a choice changes the probability
 distribution and can change confidence, so these historical measurements do not
 validate the current prompt or its cutoff. See the README for current behavior.
 
+Each regex match now gets its own request with the exact span in `to_check` and
+its original containing line in `sentence`, rather than the entire subtitle cue.
+`previousLine` and `nextLine` now provide the immediately adjacent original lines,
+crossing dialogue cue boundaries in file order. Comments and drawings are excluded;
+missing or blank neighbors are empty strings. Only `to_check` is classified—the
+neighboring lines may belong to different speakers.
+
+Identical spans are classified independently. Cross-line matches use their
+intersected lines as `sentence`, with neighbors outside that range. All context is
+taken before any removals. The historical cue-context results below do not validate
+this neighboring-line change. Offline regressions and CLI smoke checks verify the
+request boundaries and output preservation, not live Jev accuracy or confidence
+calibration.
+
 Both `remove_sdh` and `remove_furigana` now default to true: spans classified as
 `annotation` or `furigana` are removed at `confidence >= 0.9`. Use `--keep-furigana`
 for SDH-only removal or `--keep-sdh` for furigana-only removal. Speech, unselected
@@ -52,9 +66,9 @@ correctness or proof that speech deletion is impossible.
   accuracy is currently lower. These Japanese-subtitle checks are therefore
   necessary; generic confidence examples cannot establish a safe cutoff here.[7]
 
-No neighboring-cue context, classifier ensemble, or second API call was added.
-The state remains the unchanged original cue plus the exact candidate span.
-The prompt examples are illustrative and do not contain the previously failing
+No neighboring-cue context, classifier ensemble, or second API call was added in
+these historical experiments. Their state was the unchanged original cue plus
+the exact candidate span. The prompt examples are illustrative and do not contain the previously failing
 `（胃リンパ腫）` phrase or copy the development cases verbatim.
 
 ## Development comparison

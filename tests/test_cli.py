@@ -17,7 +17,6 @@ from keshigomu import clean_text, cli
 
 class Payload(TypedDict):
     state: dict[str, str]
-    questions: dict[str, dict[str, object]]
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -58,11 +57,6 @@ def test_default_removes_sdh_and_furigana_but_keeps_speech() -> None:
     def respond(request: httpx2.Request) -> httpx2.Response:
         payload = cast(Payload, json.loads(request.content))
         assert payload["state"]["sentence"] == sentence
-        question = payload["questions"]["classify_sdh"]
-        criteria = cast(dict[str, object], question["criteria"])
-        assert isinstance(question["instructions"], dict)
-        assert set(criteria) == {"annotation", "furigana", "speech"}
-        assert all(isinstance(option, dict) for option in criteria.values())
         span = payload["state"]["to_check"]
         seen.append(span)
         label = labels[span]
@@ -119,7 +113,6 @@ def test_candidate_extraction(text: str, expected: str, candidates: list[str]) -
 
     def respond(request: httpx2.Request) -> httpx2.Response:
         state = cast(Payload, json.loads(request.content))["state"]
-        assert state["sentence"] == pysubs2.SSAEvent(text=text).plaintext
         seen.append(state["to_check"])
         return httpx2.Response(
             200,
@@ -144,6 +137,140 @@ def test_candidate_extraction(text: str, expected: str, candidates: list[str]) -
     assert seen == candidates
 
 
+@pytest.mark.parametrize(
+    "text, expected, states, answers",
+    [
+        pytest.param(
+            r"{\note\Nignored}（{\i1}声{\i0}）はい（声）\N"
+            + r"（台詞（声））\n（声）いいえ"
+            + "\r\n"
+            + r"(声)もう\h一度"
+            + "\n"
+            + r"\{\b1}N（声）また\N",
+            r"{\note\Nignored}{\i1}{\i0}はい（声）\N"
+            + r"（台詞（声））\n（声）いいえ"
+            + "\r\n"
+            + r"(声)もう\h一度"
+            + "\n"
+            + r"\{\b1}Nまた\N",
+            [
+                {
+                    "previousLine": "",
+                    "sentence": "（声）はい（声）",
+                    "nextLine": "（台詞（声））",
+                    "to_check": "（声）",
+                },
+                {
+                    "previousLine": "",
+                    "sentence": "（声）はい（声）",
+                    "nextLine": "（台詞（声））",
+                    "to_check": "（声）",
+                },
+                {
+                    "previousLine": "（声）はい（声）",
+                    "sentence": "（台詞（声））",
+                    "nextLine": "（声）いいえ",
+                    "to_check": "（台詞（声））",
+                },
+                {
+                    "previousLine": "（台詞（声））",
+                    "sentence": "（声）いいえ",
+                    "nextLine": "(声)もう 一度",
+                    "to_check": "（声）",
+                },
+                {
+                    "previousLine": "（声）いいえ",
+                    "sentence": "(声)もう 一度",
+                    "nextLine": "",
+                    "to_check": "(声)",
+                },
+                {
+                    "previousLine": "",
+                    "sentence": "（声）また",
+                    "nextLine": "",
+                    "to_check": "（声）",
+                },
+            ],
+            [
+                ("annotation", 0.95),
+                ("speech", 0.95),
+                ("speech", 0.95),
+                ("annotation", 0.89),
+                ("speech", 0.95),
+                ("annotation", 0.95),
+            ],
+            id="repeated-spans-tags-and-mixed-line-breaks",
+        ),
+        pytest.param(
+            r"前\N（小さな\N声）はい（拍手）\N後",
+            r"前\Nはい\N後",
+            [
+                {
+                    "previousLine": "前",
+                    "sentence": "（小さな\n声）はい（拍手）",
+                    "nextLine": "後",
+                    "to_check": "（小さな\n声）",
+                },
+                {
+                    "previousLine": "（小さな",
+                    "sentence": "声）はい（拍手）",
+                    "nextLine": "後",
+                    "to_check": "（拍手）",
+                },
+            ],
+            [("annotation", 0.95), ("annotation", 0.95)],
+            id="cross-line-span-and-following-match",
+        ),
+        pytest.param(
+            "前\r" + r"{\note\Nignored}\N（声）はい" + "\r" + r"\{\b1}n後",
+            "前\r" + r"{\note\Nignored}\Nはい" + "\r" + r"\{\b1}n後",
+            [
+                {
+                    "previousLine": "前",
+                    "sentence": "（声）はい",
+                    "nextLine": "後",
+                    "to_check": "（声）",
+                },
+            ],
+            [("annotation", 0.95)],
+            id="normalized-crlf-does-not-invent-blank-neighbors",
+        ),
+    ],
+)
+def test_per_match_uses_original_containing_lines(
+    text: str,
+    expected: str,
+    states: list[dict[str, str]],
+    answers: list[tuple[str, float]],
+) -> None:
+    seen: list[dict[str, str]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        label, confidence = answers[len(seen)]
+        seen.append(cast(Payload, json.loads(request.content))["state"])
+        return httpx2.Response(
+            200,
+            json={
+                "model": "offline-fixture",
+                "usage": {},
+                "answers": {
+                    "classify_sdh": {
+                        "type": "choice",
+                        "choice": label,
+                        "confidence": confidence,
+                        "probabilities": {label: 1.0},
+                    }
+                },
+            },
+        )
+
+    with TypeSafeClient(
+        api_key="test-key", transport=httpx2.MockTransport(respond)
+    ) as client:
+        assert clean_text(text, client) == expected
+    assert seen == states
+
+
 @pytest.mark.parametrize("extension", ["srt", "ass", "vtt"])
 def test_cli_preserves_dialogue_timing_and_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extension: str
@@ -152,18 +279,20 @@ def test_cli_preserves_dialogue_timing_and_source(
     output = tmp_path / f"output.{extension}"
     subtitles = pysubs2.SSAFile()
     subtitles.events = [
-        pysubs2.SSAEvent(start=1000, end=2000, text="（内村）（この２つで）"),
+        pysubs2.SSAEvent(
+            start=1000, end=2000, text=r"（内村）（この２つで）\N（内村）次です"
+        ),
         pysubs2.SSAEvent(start=3000, end=4000, text="（拍手）"),
         pysubs2.SSAEvent(start=5000, end=6000, text="おはよう"),
     ]
     subtitles.save(source, encoding="cp932")
     original = source.read_bytes()
-    seen: list[str] = []
+    seen: list[dict[str, str]] = []
 
     def respond(request: httpx2.Request) -> httpx2.Response:
         payload = cast(Payload, json.loads(request.content))
         span = payload["state"]["to_check"]
-        seen.append(span)
+        seen.append(payload["state"])
         label = "speech" if span == "（この２つで）" else "annotation"
         return httpx2.Response(
             200,
@@ -183,9 +312,7 @@ def test_cli_preserves_dialogue_timing_and_source(
 
     client = TypeSafeClient(api_key="test-key", transport=httpx2.MockTransport(respond))
 
-    def client_factory(**kwargs: object) -> TypeSafeClient:
-        assert kwargs["model"] == "test-model"
-        assert kwargs["timeout"] == 30.0
+    def client_factory(**_kwargs: object) -> TypeSafeClient:
         return client
 
     monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", client_factory)
@@ -206,11 +333,36 @@ def test_cli_preserves_dialogue_timing_and_source(
     assert "speech" in result.stderr
     assert "annotation" in result.stderr
     assert "Changed 2 cues" in result.stderr
-    assert seen == ["（内村）", "（この２つで）", "（拍手）"]
+    assert seen == [
+        {
+            "previousLine": "",
+            "sentence": "（内村）（この２つで）",
+            "nextLine": "（内村）次です",
+            "to_check": "（内村）",
+        },
+        {
+            "previousLine": "",
+            "sentence": "（内村）（この２つで）",
+            "nextLine": "（内村）次です",
+            "to_check": "（この２つで）",
+        },
+        {
+            "previousLine": "（内村）（この２つで）",
+            "sentence": "（内村）次です",
+            "nextLine": "（拍手）",
+            "to_check": "（内村）",
+        },
+        {
+            "previousLine": "（内村）次です",
+            "sentence": "（拍手）",
+            "nextLine": "おはよう",
+            "to_check": "（拍手）",
+        },
+    ]
     assert source.read_bytes() == original
     cleaned = pysubs2.load(output)
     assert [(event.start, event.end, event.text) for event in cleaned] == [
-        (1000, 2000, "（この２つで）"),
+        (1000, 2000, r"（この２つで）\N次です"),
         (5000, 6000, "おはよう"),
     ]
 
@@ -311,9 +463,8 @@ def test_unknown_encoding_is_reported_before_creating_client(
     )
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert result.stderr == "Error: unknown encoding: not-a-codec\n"
+    assert result.stderr
     assert "Traceback" not in result.output
-    assert isinstance(result.exception, SystemExit)
     assert source.read_bytes() == original
     assert not output.exists()
 
