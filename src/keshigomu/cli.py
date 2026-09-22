@@ -61,7 +61,9 @@ def main(
     verbose: Annotated[
         bool,
         typer.Option(
-            "--verbose", "-v", help="Show classifications and diagnostic Noul values."
+            "--verbose",
+            "-v",
+            help="Show classifications and the diagnostic speech_content probability.",
         ),
     ] = False,
     overwrite: Annotated[

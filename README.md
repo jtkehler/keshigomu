@@ -4,6 +4,11 @@ An experimental Python library and CLI for removing bracketed Japanese subtitle
 SDH annotations and furigana with [TypeSafe](https://docs.typesafe.ai/).
 TypeSafe classifies spans; ordinary Python code decides which to remove.
 
+The policy retains dialogue, narration, whispers, sung words, inner monologue,
+and meaningful written content such as signs, on-screen messages, and translator
+notes. SDH covers speaker labels and sound, music, or vocal-delivery descriptions.
+Only supported bracketed spans are candidates; unbracketed captions are unchanged.
+
 This is a proof of concept, not a general subtitle cleaner. Review the output:
 a confident model answer can still be wrong. The API is provisional.
 
@@ -37,8 +42,8 @@ uv run keshigomu --help
 - `--model`: defaults to **`jev-latest`**. Supply an explicit model such as
   `--model jev-1.13.0` for a pinned experiment.
 - `--verbose` / `-v`: show keep/remove decisions, labels, confidence, selected
-  class probabilities, and `written_content` / `utterance_content` Noul values
-  on stderr. The Nouls are diagnostic only and never prevent removal.
+  class probabilities, and the `speech_content` Noul probability on stderr.
+  The Noul is diagnostic only and never prevents removal.
 
 Omitting the output argument writes `{input file stem}.keshigomu.srt` beside the
 input (for example, `subs/episode.ja.ass` becomes `subs/episode.ja.keshigomu.srt`).
@@ -110,23 +115,36 @@ logging, and errors.
    immediately preceding/following lines to a TypeSafe Choice question, which
    returns `annotation`, `furigana`, or `speech`. Uncertainty is handled through
    the returned confidence, not a separate choice.
+   The protected `speech` category also includes meaningful written-only content.
 2. A selected category is removed only at or above the confidence threshold.
    The remaining text and existing ASS tags are retained.
 3. `clean_file` loads and saves with pysubs2 and uses the same per-match cleaner
    across dialogue cues. It skips comments/drawings and drops a cue only when
    cleaning empties its visible text. Retained timings are preserved.
 
-Each request also includes two independent Noul questions:
+Each request also includes one independent Noul, `speech_content`:
 
-- `written_content`: whether the target reproduces meaningful written content
-  or a translator explanation.
-- `utterance_content`: whether the target transcribes an utterance, lyric, or
-  inner thought.
+> Does `to_check` contain any transcribed speech, sung words, or inner monologue?
 
-Their values are probabilities of yes, not extra confidence scores. Both are
-requested even without verbose logging, adding token usage but no extra API calls.
-They do not participate in removal decisions. Verbose logs expose both values;
-a missing answer appears as `None` and does not block cleaning.
+High values mean the target contains such words, including brief replies,
+interjections, stutters, whispers, narration, audible broadcasts, and mixed
+dialogue/metadata spans. Low values mean only speaker or sound labels, music
+descriptions, attached pronunciation readings, written-only text, or other caption
+metadata. "Meaningful" does not mean important to the plot. For this Noul, words
+read aloud from a sign count; the sign's written-only caption does not.
+
+The wording is informed by the
+[Netflix Japanese guide](https://partnerhelp.netflixstudios.com/hc/en-us/articles/215767517-Japanese-Timed-Text-Style-Guide)
+(parentheses can mark both whispered words and SDH labels) and
+[BBC guidance on preserving short speech](https://www.bbc.co.uk/accessibility/forproducts/guides/subtitles/#Prefer-verbatim).
+The Noul is narrower than the Choice's protected `speech` category: written-only
+text can be classified as `speech` while `speech_content` is low.
+
+The Noul value is a probability of yes, not an extra confidence score or a
+measurement of importance. It is requested even without verbose logging, adding
+token usage but no extra API calls. It does not participate in removal decisions.
+Verbose logs expose `speech_content`; a missing answer appears as `None` and does
+not block cleaning.
 
 Each regex match requires one sequential API request, even when identical spans
 repeat on the same line or elsewhere in the file. Decisions are not shared.
@@ -192,6 +210,10 @@ is the readability reference.
 
 ## Reusable Jimaku benchmark
 
+These frozen references protect meaningful written-only content, including signs
+and on-screen text, matching the restored Choice policy. Keep the historical
+evidence unchanged; each prompt/model configuration still needs its own live run.
+
 The entire `evals/` directory, including the runner and its tests, is ignored and
 local-only; neither the benchmark code nor copyrighted subtitles is distributed.
 When those local files are available, run their independent suite with
@@ -208,7 +230,7 @@ deliberately includes difficult content; these are not random corpus accuracy
 estimates. Previously reviewed cases are identified as regressions, not fresh
 holdouts.
 
-Run the current production cleaner against those same labels:
+To benchmark the current cleaner against those frozen references:
 
 ```sh
 uv run --env-file .env python evals/run.py run \
@@ -267,13 +289,14 @@ rank by protected losses, SDH recall, reading recall, fewer questions, then lowe
 guard cutoffs. A completed comparison exits 0 even when no policy qualifies;
 invalid/incomplete evidence exits 2. Its output file must not exist.
 
-For runs that recorded a `written_content` or `utterance_content` guard,
+For historical runs that recorded a `written_content` or `utterance_content` guard,
 `compare --sweep-guard QUESTION_ID` evaluates cutoffs 0.00 through 0.49 while
 holding every other cutoff fixed. It loads evidence once and makes no API calls.
 `score --max-written-content VALUE` and `--max-utterance-content VALUE` override
 only already-recorded guards. Schema-2 score filenames include the policy digest;
-schema-1 filenames remain unchanged. Production records both diagnostic Nouls but
-has **no active guards**. Diagnostic-only runs cannot use guard cutoff overrides.
+schema-1 filenames remain unchanged. Production records only the diagnostic
+`speech_content` Noul and has **no active guards**. Diagnostic-only runs cannot use
+guard cutoff overrides.
 
 The recorded [0.7 baseline](evals/jimaku/baseline-neighbors-0.7/report.json) used
 `jev-latest`, resolved to `jev-1.13.0`: **2,913/3,051 desired removals**, but
@@ -282,12 +305,13 @@ whisper, one lyric). Rescoring at 0.9 retains more annotations and still deletes
 23 protected spans. High aggregate accuracy does not establish speech safety.
 See [the benchmark summary](evals/jimaku/summary.json) for threshold comparisons,
 exact failures, and corpus coverage. Changing the prompt/model requires a new
-live run, but the reference labels do not need to be regenerated.
+live run. Changing the intended policy also requires separately reviewed reference
+labels; do not overwrite the frozen fixture.
 
 ### Prompt roadmap outcome
 
 The [local roadmap evidence](evals/jimaku/prompt-roadmap-ekak_zph/selection.json)
-retains the incumbent Choice and four-field context. Every live candidate completed
+retained the then-incumbent Choice and four-field context. Every live candidate completed
 all 16 files and 3,173 spans, pinned to `jev-1.13.0` at confidence 0.7:
 
 | Configuration | Protected deletions, both | True SDH removals, SDH-only | True reading removals, reading-only | Decision |
@@ -321,9 +345,11 @@ Neither guard passed the strict promotion gates at any cutoff from 0.00 to 0.49.
 Choice answers varied from the archive despite unchanged instructions and state.
 Holding each run's Choice answers fixed, the written veto saved nine protected
 spans without blocking a correct removal; the utterance veto saved one but blocked
-241 correct removals. Both questions are now retained for debugging, **without
-vetoes**. This does not promote either rejected policy or claim that the combined
-three-question configuration has passed the full-corpus gate.
+241 correct removals. Both old questions have since been replaced by the single
+diagnostic `speech_content` Noul, **without a veto**. The Choice has been restored
+to the incumbent wording above; its combination with `speech_content` has not had
+a full benchmark run. The later speech-content gating experiment used the
+now-reverted written-text-as-SDH wording and excluded written-only spans.
 
 These are development/regression measurements on the same assistant-curated
 subtitle-context labels, not a new blind holdout, audio/video-certified truth, a

@@ -9,6 +9,11 @@ Candidate extraction uses only `() （） [] 〔〕`; quotation/angle markers,
 `［］`, and `【】` do not trigger classification themselves. The current prompt has
 three choices: `annotation`, `furigana`, and `speech`. Uncertainty is handled by
 the returned confidence, not a separate `uncertain` choice.
+`annotation` covers speaker labels and sound, music, or vocal-delivery descriptions.
+The protected `speech` category includes dialogue, whispers, sung words, inner
+monologue, mixed spans containing dialogue, and meaningful written content such
+as signs, on-screen messages, and translator notes. Furigana remains a separate,
+independently selectable category.
 
 The experiments below used an earlier broad extractor and several prompt variants,
 including a fourth `uncertain` choice. Removing a choice changes the probability
@@ -31,18 +36,26 @@ calibration.
 
 The current neighboring-line implementation now has a
 [reusable Jimaku benchmark](../README.md#reusable-jimaku-benchmark), with frozen
-references and saved live responses. Its protected-content failures are reported
-separately from removal coverage; the historical tables below remain unchanged.
+references and saved live responses. Those references protect written-only content,
+matching the restored Choice policy. Historical results still belong to their
+recorded question sets; the restored Choice with the new `speech_content` Noul
+needs its own full benchmark run. Keep the artifacts and historical tables unchanged.
 
 The later [prompt roadmap](../README.md#prompt-roadmap-outcome) compared consistent
 roles, contrastive examples, and occurrence-specific context against that frozen
-baseline at 0.7. None passed the no-regression gates, so the original Choice and
-four-field state remain active. The initial roadmap skipped guard trials because
-neither role/example candidate preserved removal recall. A subsequent
+baseline at 0.7. None passed its no-regression gates, so those experiments retained
+the then-incumbent Choice and four-field state. The Choice has been restored to
+that incumbent wording, protecting written-only content; the state is unchanged. The initial
+roadmap skipped guard trials because neither role/example candidate preserved
+removal recall. A subsequent
 [incumbent Noul experiment](../README.md#incumbent-noul-follow-up) tested both
-guards separately and also failed the promotion gates. The `written_content`
-and `utterance_content` questions are retained as diagnostic signals only:
-their values appear in verbose output but never veto a removal.
+guards separately and also failed the promotion gates. The old `written_content`
+and `utterance_content` questions have since been replaced by one diagnostic
+`speech_content` Noul. It asks whether the target contains transcribed speech,
+sung words, or inner monologue, not whether the content is important to the plot.
+Short replies and mixed dialogue/metadata spans qualify; standalone SDH labels,
+furigana, and written-only text do not. This is narrower than the Choice's protected
+`speech` category. Its probability appears in verbose output but never vetoes a removal.
 The local runner now versions role translations and guard policies independently
 of production code, and supports offline policy comparison without new inference.
 Its evidence and benchmark-specific tests remain under ignored `evals/`.
@@ -59,8 +72,8 @@ It now defaults to `jev-latest`; the experiments below were pinned to
 `jev-1.13.0` and do not validate the moving alias. Invalid response confidence
 values abort without output.
 Verbose output distinguishes the actual keep/remove action from the predicted
-label and prints confidence, the predicted class probability, and both Noul values
-(older archived logs printed annotation probability instead).
+label and prints confidence, the predicted class probability, and `speech_content`
+(older archived logs printed annotation probability or the two previous Nouls).
 
 The cutoff is a conservative policy choice, not a calibrated probability of
 correctness or proof that speech deletion is impossible.

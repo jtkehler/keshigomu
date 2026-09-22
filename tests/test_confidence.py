@@ -96,9 +96,7 @@ def test_cli_threshold_controls_action_and_verbose_output(
     _ = source.write_text(
         "1\n00:00:01,000 --> 00:00:02,000\n（声）はい\n", encoding="utf-8"
     )
-    client = fixture_client(
-        0.85, nouls={"written_content": 0.97, "utterance_content": 0.98}
-    )
+    client = fixture_client(0.85, nouls={"speech_content": 0.98})
 
     def factory(**_kwargs: object) -> TypeSafeClient:
         return client
@@ -111,8 +109,7 @@ def test_cli_threshold_controls_action_and_verbose_output(
     assert result.exit_code == 0, result.output
     assert result.stdout == ""
     assert action in result.stderr
-    assert "written_content=0.97" in result.stderr
-    assert "utterance_content=0.98" in result.stderr
+    assert "speech_content=0.98" in result.stderr
     assert pysubs2.load(output)[0].text == expected
 
 
