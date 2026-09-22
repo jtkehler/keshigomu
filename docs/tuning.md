@@ -29,20 +29,38 @@ this neighboring-line change. Offline regressions and CLI smoke checks verify th
 request boundaries and output preservation, not live Jev accuracy or confidence
 calibration.
 
+The current neighboring-line implementation now has a
+[reusable Jimaku benchmark](../README.md#reusable-jimaku-benchmark), with frozen
+references and saved live responses. Its protected-content failures are reported
+separately from removal coverage; the historical tables below remain unchanged.
+
+The later [prompt roadmap](../README.md#prompt-roadmap-outcome) compared consistent
+roles, contrastive examples, and occurrence-specific context against that frozen
+baseline at 0.7. None passed the no-regression gates, so the original Choice and
+four-field state remain active. The initial roadmap skipped guard trials because
+neither role/example candidate preserved removal recall. A subsequent
+[incumbent Noul experiment](../README.md#incumbent-noul-follow-up) tested both
+guards separately and also failed the promotion gates. The `written_content`
+and `utterance_content` questions are retained as diagnostic signals only:
+their values appear in verbose output but never veto a removal.
+The local runner now versions role translations and guard policies independently
+of production code, and supports offline policy comparison without new inference.
+Its evidence and benchmark-specific tests remain under ignored `evals/`.
+
 Both `remove_sdh` and `remove_furigana` now default to true: spans classified as
-`annotation` or `furigana` are removed at `confidence >= 0.9`. Use `--keep-furigana`
+`annotation` or `furigana` are removed at `confidence >= 0.7`. Use `--keep-furigana`
 for SDH-only removal or `--keep-sdh` for furigana-only removal. Speech, unselected
 classes, and low-confidence classifications are retained.
 These historical experiments evaluated SDH-only removal, not furigana deletion,
 and do not calibrate the new default. For comparable reruns, explicitly set
 `remove_furigana=False` in Python or pass `--keep-furigana` to the CLI.
-The CLI exposes `--min-confidence` in the finite range 0–1 and defaults to 0.9.
+The CLI exposes `--min-confidence` in the finite range 0–1 and defaults to 0.7.
 It now defaults to `jev-latest`; the experiments below were pinned to
 `jev-1.13.0` and do not validate the moving alias. Invalid response confidence
 values abort without output.
 Verbose output distinguishes the actual keep/remove action from the predicted
-label and prints confidence plus the predicted class probability (older archived
-logs printed annotation probability instead).
+label and prints confidence, the predicted class probability, and both Noul values
+(older archived logs printed annotation probability instead).
 
 The cutoff is a conservative policy choice, not a calibrated probability of
 correctness or proof that speech deletion is impossible.

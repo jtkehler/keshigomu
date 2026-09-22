@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import TypedDict, cast
 
 import httpx2
 import pysubs2
@@ -13,8 +14,19 @@ from typesafe_sdk import TypeSafeClient, TypeSafeError
 from keshigomu import clean_text, cli
 
 
-def fixture_client(confidence: float, choice: str = "annotation") -> TypeSafeClient:
-    def respond(_request: httpx2.Request) -> httpx2.Response:
+class Payload(TypedDict):
+    questions: dict[str, dict[str, object]]
+
+
+def fixture_client(
+    confidence: float,
+    choice: str = "annotation",
+    *,
+    nouls: dict[str, float] | None = None,
+) -> TypeSafeClient:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        payload = cast(Payload, json.loads(request.content))
+        values = {} if nouls is None else nouls
         return httpx2.Response(
             200,
             content=json.dumps(
@@ -31,7 +43,15 @@ def fixture_client(confidence: float, choice: str = "annotation") -> TypeSafeCli
                                 choice: 0.99,
                                 "furigana" if choice == "speech" else "speech": 0.01,
                             },
-                        }
+                        },
+                        **{
+                            question_id: {
+                                "type": "noul",
+                                "noul": values.get(question_id, 0.0),
+                            }
+                            for question_id, question in payload["questions"].items()
+                            if question["type"] == "noul"
+                        },
                     },
                 }
             ),
@@ -41,23 +61,25 @@ def fixture_client(confidence: float, choice: str = "annotation") -> TypeSafeCli
     return TypeSafeClient(api_key="test-key", transport=httpx2.MockTransport(respond))
 
 
-@pytest.mark.parametrize("confidence", [0.0, 0.45, 0.79, 0.8, 0.89, 0.8999])
-def test_default_keeps_low_confidence_annotation_verbatim(confidence: float) -> None:
+@pytest.mark.parametrize("confidence", [0.0, 0.6999])
+def test_low_confidence_annotation_is_preserved(confidence: float) -> None:
     text = r"{\i1}（胃リンパ腫）{\i0}\Nはい"
     with fixture_client(confidence) as client:
-        assert clean_text(text, client) == text
+        assert clean_text(text, client, min_confidence=0.7) == text
 
 
-@pytest.mark.parametrize("confidence", [0.9, 0.9001, 1.0])
+@pytest.mark.parametrize("confidence", [0.7, 1.0])
 def test_confidence_boundary_is_inclusive(confidence: float) -> None:
     with fixture_client(confidence) as client:
-        assert clean_text(r"（声{\i1}）はい", client) == r"{\i1}はい"
+        assert (
+            clean_text(r"（声{\i1}）はい", client, min_confidence=0.7) == r"{\i1}はい"
+        )
 
 
 @pytest.mark.parametrize(
     "threshold, expected, action",
     [
-        (None, "（声）はい", "keep"),
+        (None, "はい", "remove"),
         ("0.9", "（声）はい", "keep"),
         ("0.8", "はい", "remove"),
     ],
@@ -74,7 +96,9 @@ def test_cli_threshold_controls_action_and_verbose_output(
     _ = source.write_text(
         "1\n00:00:01,000 --> 00:00:02,000\n（声）はい\n", encoding="utf-8"
     )
-    client = fixture_client(0.85)
+    client = fixture_client(
+        0.85, nouls={"written_content": 0.97, "utterance_content": 0.98}
+    )
 
     def factory(**_kwargs: object) -> TypeSafeClient:
         return client
@@ -87,8 +111,8 @@ def test_cli_threshold_controls_action_and_verbose_output(
     assert result.exit_code == 0, result.output
     assert result.stdout == ""
     assert action in result.stderr
-    assert "confidence=0.85" in result.stderr
-    assert "p(annotation)=0.99" in result.stderr
+    assert "written_content=0.97" in result.stderr
+    assert "utterance_content=0.98" in result.stderr
     assert pysubs2.load(output)[0].text == expected
 
 

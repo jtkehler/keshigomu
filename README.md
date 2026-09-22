@@ -32,12 +32,13 @@ uv run keshigomu --help
 - `--keep-sdh --keep-furigana` disables classification entirely; no API key or
   requests are needed. The file is still loaded and serialized, not copied byte
   for byte.
-- `--min-confidence`: inclusive confidence cutoff, default **0.9**. Speech and
+- `--min-confidence`: inclusive confidence cutoff, default **0.7**. Speech and
   lower-confidence classifications stay.
 - `--model`: defaults to **`jev-latest`**. Supply an explicit model such as
   `--model jev-1.13.0` for a pinned experiment.
-- `--verbose` / `-v`: show keep/remove decisions, labels, confidence, and selected
-  class probabilities on stderr. Confidence, not class probability, controls removal.
+- `--verbose` / `-v`: show keep/remove decisions, labels, confidence, selected
+  class probabilities, and `written_content` / `utterance_content` Noul values
+  on stderr. The Nouls are diagnostic only and never prevent removal.
 
 Omitting the output argument writes `{input file stem}.keshigomu.srt` beside the
 input (for example, `subs/episode.ja.ass` becomes `subs/episode.ja.keshigomu.srt`).
@@ -115,6 +116,18 @@ logging, and errors.
    across dialogue cues. It skips comments/drawings and drops a cue only when
    cleaning empties its visible text. Retained timings are preserved.
 
+Each request also includes two independent Noul questions:
+
+- `written_content`: whether the target reproduces meaningful written content
+  or a translator explanation.
+- `utterance_content`: whether the target transcribes an utterance, lyric, or
+  inner thought.
+
+Their values are probabilities of yes, not extra confidence scores. Both are
+requested even without verbose logging, adding token usage but no extra API calls.
+They do not participate in removal decisions. Verbose logs expose both values;
+a missing answer appears as `None` and does not block cleaning.
+
 Each regex match requires one sequential API request, even when identical spans
 repeat on the same line or elsewhere in the file. Decisions are not shared.
 The state has four string fields: `sentence` is the original containing line,
@@ -157,16 +170,17 @@ objects or policy-replay APIs. Repeated cleaning calls classify again.
 - Identical spans on the same line have identical model state: requests do not
   include occurrence offsets. Repeated cleaning is not guaranteed idempotent
   because line context changes.
-- A 0.9 confidence cutoff is a conservative policy, not 90% accuracy or a promise
-  of zero dialogue loss. A cutoff of zero removes the confidence safeguard.
+- Confidence is not a calibrated accuracy percentage. The 0.7 default is a removal
+  policy, not a promise of zero dialogue loss. A cutoff of zero removes the
+  confidence safeguard.
 
 ## Development
 
 ```sh
-uv run pytest -q
-uv run ruff check .
-uv run ruff format --check .
-uv run basedpyright
+uv run --no-env-file pytest -q tests
+uv run --no-env-file ruff check src tests
+uv run --no-env-file ruff format --check src tests
+uv run --no-env-file basedpyright src tests
 ```
 
 Tests use mocked HTTP responses to exercise the actual SDK and processing code.
@@ -175,6 +189,145 @@ output safety, cleaning counts, and CLI streams. They do **not** measure classif
 accuracy. Public functions use Google-style docstrings; the
 [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
 is the readability reference.
+
+## Reusable Jimaku benchmark
+
+The entire `evals/` directory, including the runner and its tests, is ignored and
+local-only; neither the benchmark code nor copyrighted subtitles is distributed.
+When those local files are available, run their independent suite with
+`uv run --no-env-file pytest -q evals/test_benchmark.py`.
+
+[`evals/jimaku/cases.json`](evals/jimaku/cases.json) freezes **3,173 reviewed spans
+from 16 complete files / 14 titles**: 2,919 annotations, 132 readings, and 122
+protected-content spans. References include exact raw offsets, original cue
+context, source hashes, review provenance, and label rationales. New labels were
+curated by coding assistants before inference; other cases reuse historical
+fixtures. These are subtitle-context judgments, not audio/video-certified ground
+truth. Selection
+deliberately includes difficult content; these are not random corpus accuracy
+estimates. Previously reviewed cases are identified as regressions, not fresh
+holdouts.
+
+Run the current production cleaner against those same labels:
+
+```sh
+uv run --env-file .env python evals/run.py run \
+  /tmp/keshigomu-jimaku-new evals/jimaku/cases.json \
+  --corpus-root "$HOME/Documents/jimaku_subtitles" \
+  --model jev-1.13.0 --min-confidence 0.7
+```
+
+The runner verifies every source hash and complete extraction coverage **before
+any API calls**, then cleans byte-identical frozen copies. Source subtitles stay
+untouched. Requests are sequential within each file; `--workers` defaults to four
+concurrent files. Omitted model/cutoff options follow the production defaults.
+`--categories sdh` or `--categories furigana` selects just that removal category.
+
+Each run saves frozen references/sources, the actual question and code/version
+fingerprints, raw request/response records with request IDs, resolved models,
+confidence/probabilities, reported token usage, latency, cleaned files, reference
+outputs, and per-case/file/class/split metrics. Partial or failed files are
+reported separately and excluded from accuracy. Latencies count logical SDK
+calls, including retries; intermediate retry usage/attempt counts are unavailable.
+Raw capture uses the private `_request` hook in `typesafe-sdk` 0.7.0; revalidate
+the recorder when upgrading the SDK.
+
+Change only the cutoff or removal categories without spending more inference:
+
+```sh
+uv run --no-env-file python evals/run.py score \
+  /tmp/keshigomu-jimaku-new --min-confidence 0.9
+```
+
+`score` needs neither the original corpus nor credentials, and uses the recorded
+question/responses rather than today's prompt. Run directories and score files
+refuse overwrite. Exit status 1 means action errors or failed files; inspect the
+report to distinguish model mistakes from operational failures.
+
+New runs use schema 2: they freeze the complete question map, its model-role to
+archival-label translation, and active preservation-guard cutoffs. The archival
+labels stay `annotation`, `furigana`, and `speech`; `speech` includes **all**
+protected content, not only utterances. Missing-schema/schema-1 runs retain
+identity labels, no guards, and their original report shape.
+
+Compare complete runs offline without changing the confidence policy:
+
+```sh
+TYPESAFE_API_KEY= uv run --no-env-file python evals/run.py compare \
+  evals/jimaku/baseline-neighbors-0.7 /tmp/keshigomu-jimaku-new \
+  /tmp/keshigomu-comparison.json
+```
+
+`compare` requires matching references/source bytes, resolved `jev-1.13.0`,
+complete responses, and passing recorded-action replay. At confidence 0.7 it
+checks both-enabled, SDH-only, and furigana-only modes. Promotion requires strictly
+fewer protected deletions, no new false-deletion IDs in any mode, and no loss of
+true removals per removable gold class or single-category mode. Eligible policies
+rank by protected losses, SDH recall, reading recall, fewer questions, then lower
+guard cutoffs. A completed comparison exits 0 even when no policy qualifies;
+invalid/incomplete evidence exits 2. Its output file must not exist.
+
+For runs that recorded a `written_content` or `utterance_content` guard,
+`compare --sweep-guard QUESTION_ID` evaluates cutoffs 0.00 through 0.49 while
+holding every other cutoff fixed. It loads evidence once and makes no API calls.
+`score --max-written-content VALUE` and `--max-utterance-content VALUE` override
+only already-recorded guards. Schema-2 score filenames include the policy digest;
+schema-1 filenames remain unchanged. Production records both diagnostic Nouls but
+has **no active guards**. Diagnostic-only runs cannot use guard cutoff overrides.
+
+The recorded [0.7 baseline](evals/jimaku/baseline-neighbors-0.7/report.json) used
+`jev-latest`, resolved to `jev-1.13.0`: **2,913/3,051 desired removals**, but
+**38/122 protected spans deleted** (36 screen-text/translation-note spans, one
+whisper, one lyric). Rescoring at 0.9 retains more annotations and still deletes
+23 protected spans. High aggregate accuracy does not establish speech safety.
+See [the benchmark summary](evals/jimaku/summary.json) for threshold comparisons,
+exact failures, and corpus coverage. Changing the prompt/model requires a new
+live run, but the reference labels do not need to be regenerated.
+
+### Prompt roadmap outcome
+
+The [local roadmap evidence](evals/jimaku/prompt-roadmap-ekak_zph/selection.json)
+retains the incumbent Choice and four-field context. Every live candidate completed
+all 16 files and 3,173 spans, pinned to `jev-1.13.0` at confidence 0.7:
+
+| Configuration | Protected deletions, both | True SDH removals, SDH-only | True reading removals, reading-only | Decision |
+| --- | ---: | ---: | ---: | --- |
+| Incumbent baseline | 38 | 2,788 | 125 | Retained |
+| Consistent roles, original examples | 8 | 2,483 | 130 | Rejected: recall loss and new disabled-category deletion |
+| Contrastive examples | 8 | 2,439 | 130 | Rejected: recall loss and new disabled-category deletion |
+| Occurrence context on incumbent | 39 | 2,770 | 128 | Rejected: recall loss and two new protected deletion IDs |
+
+Neither role/example candidate met the recall floors, so the written-content and
+utterance veto experiments were skipped: a veto cannot recover missed removals.
+Occurrence context passed the synthetic repeated-target check but failed its
+separate zero-corpus-regression gate. Identical same-line targets therefore remain
+ambiguous in production. The incumbent was replayed through actual `clean_file`
+with saved SDK responses across all 16 files and three category modes; request
+state/questions, rendered output, counts, and source hashes matched.
+
+### Incumbent Noul follow-up
+
+The [follow-up evidence](evals/jimaku/incumbent-nouls-e1p7dikh/selection.json)
+tested each Noul separately on the incumbent Choice and state, again on all
+3,173 spans with `jev-1.13.0` and confidence 0.7:
+
+| Configuration | Correct removals | Protected deletions |
+| --- | ---: | ---: |
+| Frozen incumbent | 2,913 | 38 |
+| Written-content veto at 0.49 | 2,910 | 29 |
+| Utterance-content veto at 0.49 | 2,671 | 39 |
+
+Neither guard passed the strict promotion gates at any cutoff from 0.00 to 0.49.
+Choice answers varied from the archive despite unchanged instructions and state.
+Holding each run's Choice answers fixed, the written veto saved nine protected
+spans without blocking a correct removal; the utterance veto saved one but blocked
+241 correct removals. Both questions are now retained for debugging, **without
+vetoes**. This does not promote either rejected policy or claim that the combined
+three-question configuration has passed the full-corpus gate.
+
+These are development/regression measurements on the same assistant-curated
+subtitle-context labels, not a new blind holdout, audio/video-certified truth, a
+general safety guarantee, or validation of future `jev-latest` versions.
 
 ## Historical evaluation
 
@@ -187,5 +340,5 @@ those results do not validate the current three-choice prompt or its cutoff.
 Use `remove_furigana=False` or `--keep-furigana` for SDH-only runs.
 
 Use an explicit model for reproducible evaluation and record the model identifier
-returned by the service. The historical harnesses and corpus live outside this
-repository and may need adaptation to the current API.
+returned by the service. Some older historical harnesses live outside this
+repository and may need adaptation; `evals/run.py` is the maintained runner.

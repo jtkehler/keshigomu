@@ -59,7 +59,10 @@ def main(
         str, typer.Option(help="Input encoding; output is UTF-8.")
     ] = "utf-8-sig",
     verbose: Annotated[
-        bool, typer.Option("--verbose", "-v", help="Show each classification.")
+        bool,
+        typer.Option(
+            "--verbose", "-v", help="Show classifications and diagnostic Noul values."
+        ),
     ] = False,
     overwrite: Annotated[
         bool, typer.Option("--overwrite", help="Replace an existing output file.")

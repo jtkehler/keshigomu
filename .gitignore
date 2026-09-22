@@ -11,3 +11,6 @@ wheels/
 
 # Local API credentials
 .env
+
+# Local evaluations include copyrighted subtitles
+/evals/
