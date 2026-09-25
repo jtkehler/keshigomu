@@ -173,33 +173,33 @@ def test_file_context_skips_non_dialogue_and_preserves_dropped_neighbors(
 
     assert states == [
         {
-            "previousLine": "",
+            "previous_line": "",
             "sentence": "（拍手）",
-            "nextLine": "（声）",
+            "next_line": "（声）",
             "to_check": "（拍手）",
         },
         {
-            "previousLine": "（拍手）",
+            "previous_line": "（拍手）",
             "sentence": "（声）",
-            "nextLine": "はい",
+            "next_line": "はい",
             "to_check": "（声）",
         },
         {
-            "previousLine": "つづき",
+            "previous_line": "つづき",
             "sentence": "（声）また",
-            "nextLine": "（内緒）",
+            "next_line": "（内緒）",
             "to_check": "（声）",
         },
         {
-            "previousLine": "（声）また",
+            "previous_line": "（声）また",
             "sentence": "（内緒）",
-            "nextLine": "",
+            "next_line": "",
             "to_check": "（内緒）",
         },
         {
-            "previousLine": "",
+            "previous_line": "",
             "sentence": "（声）単独",
-            "nextLine": "",
+            "next_line": "",
             "to_check": "（声）",
         },
     ]

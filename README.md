@@ -118,7 +118,7 @@ logging, and errors.
 Each regex match requires one sequential API request, even when identical spans
 repeat on the same line or elsewhere in the file. Decisions are not shared.
 The state has four string fields: `sentence` is the original containing line,
-`to_check` is the candidate span, and `previousLine`/`nextLine` supply one original
+`to_check` is the candidate span, and `previous_line`/`next_line` supply one original
 line on either side. The neighboring lines are context only, not deletion targets.
 
 For `clean_file`, neighbors cross dialogue cue boundaries in loaded-file order;
@@ -127,7 +127,7 @@ limited to the supplied text. Blank lines are not skipped, and a missing or blan
 neighbor is `""`. Context always comes from the original text, before any removals.
 ASS `\N`/`\n` and literal line breaks delimit context; breaks inside complete ASS
 tags do not. A cross-line match uses the lines it spans as `sentence`, with
-`previousLine` before the first and `nextLine` after the last.
+`previous_line` before the first and `next_line` after the last.
 Verbose logs include all four fields.
 
 With removal enabled, cues without candidates make no requests but still create

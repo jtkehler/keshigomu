@@ -32,8 +32,8 @@ _LINE_BREAKS = re.compile(
 _QUESTION = typesafe_sdk.Choice(
     instructions={
         "question": "What is the entire `to_check` span doing in the Japanese subtitle text `sentence`?",
-        "focus": "Classify only `to_check` in `sentence`. Use `previousLine` and `nextLine` as surrounding context, not as part of the span being classified.",
-        "context": "`previousLine` is the line immediately before `sentence`; `nextLine` is the line immediately after it. They may come from adjacent subtitle cues or different speakers. Empty strings mean no neighboring text is available.",
+        "focus": "Classify only `to_check` in `sentence`. Use `previous_line` and `next_line` as surrounding context, not as part of the span being classified.",
+        "context": "`previous_line` is the line immediately before `sentence`; `next_line` is the line immediately after it. They may come from adjacent subtitle cues or different speakers. Empty strings mean no neighboring text is available.",
         "boundaries": [
             "Parentheses and quotation marks can contain spoken words, whispers or thoughts; punctuation alone is not evidence of SDH.",
             "An annotation describes who speaks or what is heard; speech transcribes what is said or thought.",
@@ -260,9 +260,9 @@ def _clean_texts(
             # SDK 0.7 recursive JSON typing is partially unknown to Pyright.
             response = client.system_one(  # pyright: ignore[reportUnknownMemberType]
                 state={
-                    "previousLine": previous_line,
+                    "previous_line": previous_line,
                     "sentence": sentence,
-                    "nextLine": next_line,
+                    "next_line": next_line,
                     "to_check": candidate,
                 },
                 questions={"classify_sdh": _QUESTION},
@@ -281,7 +281,7 @@ def _clean_texts(
                 or (remove_furigana and answer.choice == "furigana")
             )
             logger.debug(
-                "%-6s %-10s confidence=%.2f p(%s)=%.2f previousLine=%r sentence=%r nextLine=%r to_check=%r",
+                "%-6s %-10s confidence=%.2f p(%s)=%.2f previous_line=%r sentence=%r next_line=%r to_check=%r",
                 "remove" if remove else "keep",
                 answer.choice,
                 answer.confidence,

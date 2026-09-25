@@ -17,7 +17,7 @@ validate the current prompt or its cutoff. See the README for current behavior.
 
 Each regex match now gets its own request with the exact span in `to_check` and
 its original containing line in `sentence`, rather than the entire subtitle cue.
-`previousLine` and `nextLine` now provide the immediately adjacent original lines,
+`previous_line` and `next_line` now provide the immediately adjacent original lines,
 crossing dialogue cue boundaries in file order. Comments and drawings are excluded;
 missing or blank neighbors are empty strings. Only `to_check` is classified—the
 neighboring lines may belong to different speakers.
