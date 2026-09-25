@@ -32,7 +32,7 @@ uv run keshigomu --help
 - `--keep-sdh --keep-furigana` disables classification entirely; no API key or
   requests are needed. The file is still loaded and serialized, not copied byte
   for byte.
-- `--min-confidence`: inclusive confidence cutoff, default **0.9**. Speech and
+- `--min-confidence`: inclusive confidence cutoff, default **0.7**. Speech and
   lower-confidence classifications stay.
 - `--model`: defaults to **`jev-latest`**. Supply an explicit model such as
   `--model jev-1.13.0` for a pinned experiment.
@@ -157,8 +157,9 @@ objects or policy-replay APIs. Repeated cleaning calls classify again.
 - Identical spans on the same line have identical model state: requests do not
   include occurrence offsets. Repeated cleaning is not guaranteed idempotent
   because line context changes.
-- A 0.9 confidence cutoff is a conservative policy, not 90% accuracy or a promise
-  of zero dialogue loss. A cutoff of zero removes the confidence safeguard.
+- Confidence is not a calibrated accuracy percentage. The 0.7 default is a removal
+  policy, not a promise of zero dialogue loss. A cutoff of zero removes the
+  confidence safeguard.
 
 ## Development
 

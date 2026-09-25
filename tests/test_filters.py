@@ -208,7 +208,12 @@ def test_furigana_uses_confidence_gate_and_preserves_ass_tags(
     with TypeSafeClient(
         api_key="test-key", transport=httpx2.MockTransport(respond)
     ) as client:
-        assert keshigomu.clean_text(text, client, remove_sdh=remove_sdh) == expected
+        assert (
+            keshigomu.clean_text(
+                text, client, remove_sdh=remove_sdh, min_confidence=0.9
+            )
+            == expected
+        )
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""

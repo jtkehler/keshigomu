@@ -41,14 +41,14 @@ def fixture_client(confidence: float, choice: str = "annotation") -> TypeSafeCli
     return TypeSafeClient(api_key="test-key", transport=httpx2.MockTransport(respond))
 
 
-@pytest.mark.parametrize("confidence", [0.0, 0.45, 0.79, 0.8, 0.89, 0.8999])
+@pytest.mark.parametrize("confidence", [0.0, 0.45, 0.69, 0.6999])
 def test_default_keeps_low_confidence_annotation_verbatim(confidence: float) -> None:
     text = r"{\i1}（胃リンパ腫）{\i0}\Nはい"
     with fixture_client(confidence) as client:
         assert clean_text(text, client) == text
 
 
-@pytest.mark.parametrize("confidence", [0.9, 0.9001, 1.0])
+@pytest.mark.parametrize("confidence", [0.7, 0.7001, 1.0])
 def test_confidence_boundary_is_inclusive(confidence: float) -> None:
     with fixture_client(confidence) as client:
         assert clean_text(r"（声{\i1}）はい", client) == r"{\i1}はい"
@@ -57,7 +57,7 @@ def test_confidence_boundary_is_inclusive(confidence: float) -> None:
 @pytest.mark.parametrize(
     "threshold, expected, action",
     [
-        (None, "（声）はい", "keep"),
+        (None, "はい", "remove"),
         ("0.9", "（声）はい", "keep"),
         ("0.8", "はい", "remove"),
     ],

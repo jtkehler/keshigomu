@@ -10,7 +10,7 @@ import pysubs2
 import typesafe_sdk
 
 DEFAULT_MODEL = "jev-latest"
-DEFAULT_MIN_CONFIDENCE = 0.9
+DEFAULT_MIN_CONFIDENCE = 0.7
 logger = logging.getLogger(__name__)
 
 _BRACKETS = re.compile(

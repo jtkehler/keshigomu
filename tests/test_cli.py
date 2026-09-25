@@ -267,7 +267,7 @@ def test_per_match_uses_original_containing_lines(
     with TypeSafeClient(
         api_key="test-key", transport=httpx2.MockTransport(respond)
     ) as client:
-        assert clean_text(text, client) == expected
+        assert clean_text(text, client, min_confidence=0.9) == expected
     assert seen == states
 
 

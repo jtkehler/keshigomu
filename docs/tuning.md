@@ -30,13 +30,13 @@ request boundaries and output preservation, not live Jev accuracy or confidence
 calibration.
 
 Both `remove_sdh` and `remove_furigana` now default to true: spans classified as
-`annotation` or `furigana` are removed at `confidence >= 0.9`. Use `--keep-furigana`
+`annotation` or `furigana` are removed at `confidence >= 0.7`. Use `--keep-furigana`
 for SDH-only removal or `--keep-sdh` for furigana-only removal. Speech, unselected
 classes, and low-confidence classifications are retained.
 These historical experiments evaluated SDH-only removal, not furigana deletion,
 and do not calibrate the new default. For comparable reruns, explicitly set
 `remove_furigana=False` in Python or pass `--keep-furigana` to the CLI.
-The CLI exposes `--min-confidence` in the finite range 0–1 and defaults to 0.9.
+The CLI exposes `--min-confidence` in the finite range 0–1 and defaults to 0.7.
 It now defaults to `jev-latest`; the experiments below were pinned to
 `jev-1.13.0` and do not validate the moving alias. Invalid response confidence
 values abort without output.
